@@ -3,7 +3,7 @@
  * static methods used in the app
  */
 
-package com.example.socialcompass;
+package com.example.socialcompass.utilities;
 
 import static java.lang.Math.log;
 
@@ -22,9 +22,9 @@ import java.util.Optional;
  */
 public class Utilities {
     static final int MAX_LABEL_LENGTH = 20;
-    static final int INVISIBLE_CIRCLE = 3000;
+    public static final int INVISIBLE_CIRCLE = 3000;
 
-    static final double DISPLAY_MARGIN = 450.0;
+    public static final int DISPLAY_MARGIN = 450;
 
     static final String USE_PHONE_ORIENTATION = "-1";
     static final String INCORRECT_EMPTY = "You need to enter at least one location!";
@@ -35,6 +35,8 @@ public class Utilities {
     static final Map<String, String> valueDisplayMap = new HashMap<>() {{
         put("-360.0 -360.0", "");
     }};
+
+    public static final String DEFAULT_URL = "https://socialcompass.goto.ucsd.edu/";
 
     /**
      * Display an alert dialog
@@ -268,7 +270,8 @@ public class Utilities {
             if (distance >= 12450.5) {
                 return DISPLAY_MARGIN;
             } else if (distance >= 500.0) {
-                return (log(distance - 500.0)) / (log(12450.5) - log(500.0)) * 100 + 350;
+                //return (log(distance - 500.0)) / (log(12450.5) - log(500.0)) * 100 + 350;
+                return (distance-500.0)/(12450.5-500.0)*100+350;
             } else if (distance >= 10.0) {
                 return (distance - 10.0) / (500.0 - 10.0) * 100 + 250;
             } else if (distance >= 1.0) {

@@ -1,4 +1,10 @@
-package com.example.socialcompass;
+/**
+ * This class includes a lot of methods for location calculations
+ */
+
+package com.example.socialcompass.utilities;
+
+import com.example.socialcompass.entity.Position;
 
 public class locationCalculations {
     /*

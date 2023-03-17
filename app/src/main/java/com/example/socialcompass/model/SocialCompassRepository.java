@@ -1,30 +1,27 @@
-package com.example.socialcompass;
+/**
+ * This class is a mediator for local database and remote server
+ */
 
-import android.provider.MediaStore;
+package com.example.socialcompass.model;
 
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.MediatorLiveData;
 import androidx.lifecycle.MutableLiveData;
 import androidx.lifecycle.Observer;
 
-import com.google.gson.Gson;
+import com.example.socialcompass.entity.SocialCompassUser;
 
-import java.io.IOException;
 import java.util.List;
-import java.util.NoSuchElementException;
 
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.RequestBody;
-import okhttp3.Response;
 
 public class SocialCompassRepository {
     private final SocialCompassDao dao;
     private final OkHttpClient client = new OkHttpClient();
     public static final MediaType JSON
             = MediaType.get("applicaion/json; charset=utf-8");
-
+    private SocialCompassAPI api;
     public SocialCompassRepository(SocialCompassDao dao) {
         this.dao = dao;
     }
@@ -60,11 +57,8 @@ public class SocialCompassRepository {
     }
 
     public void upsertLocal(SocialCompassUser user) {
+        user.private_code = user.public_code;
         dao.upsert(user);
-    }
-
-    public boolean existsLocal(String title) {
-        return dao.exists(title);
     }
 
     // Remote Methods
@@ -74,8 +68,7 @@ public class SocialCompassRepository {
     @ensures local has most updated user instance from server
      */
     public LiveData<SocialCompassUser> getRemote(String userID) throws Exception {
-        SocialCompassAPI api = new SocialCompassAPI();
-        api = api.provide();
+        api = SocialCompassAPI.provide();
         SocialCompassUser user = api.getUser(userID);
         MutableLiveData<SocialCompassUser> currUser = new MutableLiveData<>();
         currUser.setValue(user);
@@ -87,8 +80,13 @@ public class SocialCompassRepository {
     @ensures server has most updated version of user
      */
     public void upsertRemote(SocialCompassUser user) throws Exception {
-        SocialCompassAPI api = new SocialCompassAPI();
-        api = api.provide();
+        api = SocialCompassAPI.provide();
         api.addUser(user);
+    }
+
+    public SocialCompassUser getRemoteWithoutLiveData(String userID) throws Exception{
+        api = SocialCompassAPI.provide();
+        SocialCompassUser user = api.getUser(userID);
+        return user;
     }
 }

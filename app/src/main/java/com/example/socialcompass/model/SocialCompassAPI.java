@@ -1,30 +1,23 @@
-package com.example.socialcompass;
+/**
+ * A SocialCompassAPI class to deal with communication with remote server
+ */
 
-import static com.example.socialcompass.SocialCompassRepository.JSON;
+package com.example.socialcompass.model;
 
-import android.util.Log;
-
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.lifecycle.LiveData;
-import androidx.lifecycle.MutableLiveData;
-
+import com.example.socialcompass.entity.AdaptedUser;
+import com.example.socialcompass.entity.SocialCompassUser;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 
 import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.IOException;
 import java.util.NoSuchElementException;
 
-import okhttp3.FormBody;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import okio.BufferedSink;
 
 public class SocialCompassAPI {
     private volatile static SocialCompassAPI instance = null;
@@ -32,11 +25,17 @@ public class SocialCompassAPI {
 
     public static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
+    public static String serverURL = "";
     private OkHttpClient client;
+
     public SocialCompassAPI() {
         this.client = new OkHttpClient();
     }
 
+    /**
+     * Singleton pattern, return a API
+     * @return
+     */
     public static SocialCompassAPI provide() {
         if (instance == null) {
             instance = new SocialCompassAPI();
@@ -44,15 +43,30 @@ public class SocialCompassAPI {
         return instance;
     }
 
-    /*
-    @requires valid user code already saved to server
-    @ensures users data is retrieved
+    /**
+     * set URL for testing purposes
+     * @param anURL
+     */
+    public void useURL(String anURL) {
+        if (!anURL.endsWith("/")) {
+            anURL += "/";
+        }
+        serverURL = anURL;
+    }
+
+
+    /**
+     * Get user from remote server
+     * @param public_code
+     * @return
+     * @throws IOException
+     * @throws InterruptedException
      */
     public SocialCompassUser getUser(String public_code) throws IOException, InterruptedException {
         final String[] fullBody = new String[1];
         String noSpaceID = public_code.replace(" ", "%20");
         Request request = new Request.Builder()
-                .url("https://socialcompass.goto.ucsd.edu/location/" + noSpaceID)
+                .url(serverURL + "location/" + noSpaceID)
                 .build();
         //try isn't running, operating on background thread, need completion block? or stop main thread and run on separate thread.
         Thread t = new Thread(new Runnable() {
@@ -77,18 +91,20 @@ public class SocialCompassAPI {
         return user;
     }
 
-    /*
-    @requires non null user
-    @ensures server has most recent user data
+    /**
+     * add user to remote server
+     * @param user
+     * @throws InterruptedException
+     * @throws JSONException
      */
     public void addUser(SocialCompassUser user) throws InterruptedException, JSONException {
 
         Gson gson = new Gson();
         AdaptedUser newUser = new AdaptedUser(user);
-        RequestBody body = RequestBody.create(gson.toJson(newUser).toString(), JSON);
+        RequestBody body = RequestBody.create(gson.toJson(newUser), JSON);
         String noSpaceID = user.public_code.replace(" ", "%20");
         Request request = new Request.Builder()
-                .url("https://socialcompass.goto.ucsd.edu/location/" + noSpaceID)
+                .url(serverURL + "location/" + noSpaceID)
                 .put(body)
                 .build();
         Thread t = new Thread(new Runnable() {
@@ -106,5 +122,13 @@ public class SocialCompassAPI {
 
         t.start();
         t.join();
+    }
+
+    /**
+     * for testing purpose only
+     * @param url
+     */
+    public static void setServerURL(String url){
+        serverURL = url;
     }
 }

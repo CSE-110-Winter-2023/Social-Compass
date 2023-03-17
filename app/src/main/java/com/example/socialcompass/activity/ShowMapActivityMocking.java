@@ -3,7 +3,7 @@
  * the show map page
  */
 
-package com.example.socialcompass;
+package com.example.socialcompass.activity;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.constraintlayout.widget.ConstraintLayout;
@@ -12,24 +12,33 @@ import androidx.constraintlayout.widget.ConstraintSet;
 import androidx.core.app.ActivityCompat;
 import androidx.lifecycle.LiveData;
 import androidx.lifecycle.Observer;
+import androidx.lifecycle.ViewModelProvider;
 
-import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.location.LocationManager;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.util.Log;
 import android.util.Pair;
-import android.view.LayoutInflater;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import com.example.socialcompass.service.LocationService;
+import com.example.socialcompass.service.OrientationService;
+import com.example.socialcompass.entity.Position;
+import com.example.socialcompass.R;
+import com.example.socialcompass.service.Service;
+import com.example.socialcompass.model.SocialCompassAPI;
+import com.example.socialcompass.entity.SocialCompassUser;
+import com.example.socialcompass.viewmodel.SocialCompassViewModel;
+import com.example.socialcompass.utilities.Utilities;
+
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -37,57 +46,56 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
-import okhttp3.internal.Util;
 
 /**
  * This class is ShowMapActivity class used to support show map page
  * @invariant user must have an active registered profile
  */
-public class ShowMapActivity extends AppCompatActivity {
+
+public class ShowMapActivityMocking extends AppCompatActivity {
     private Service orientationService;
     private Service locationService;
     private ConstraintLayout compass;
     private ConstraintProperties cp;
     private SharedPreferences preferences;
-    private Position destination1;
 
-    private int state = 2;
-
-    private int dpscale = 450;
-
-    private int distanceScale = 500;
+    public int state = 2;
 
     private Position current = new Position(60, -130);
 
 
     private Position previousLocation = new Position(0, 0);
-    private int manual_rotation;
     private float orientation;
     private String uid;
 
+    private String label;
+
+    private String private_code;
+
     private Map<String, String> userIDs = new HashMap<>();
     private Map<String, String> textID2imageID = new HashMap<>();
+
+    public SocialCompassViewModel viewmodel;
+
+    private Map<String, String> userLabels = new HashMap<>();
+
+    private static final int MAX_TRUNCATED_LENGTH = 4;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_show_map);
-        uid = getIntent().getStringExtra("uid");
-        var db = SocialCompassDatabase.provide(getApplicationContext()); //fix this later lmao
-        var dao = db.getDao();
-        var repo = new SocialCompassRepository(dao);
-        SocialCompassUser selfUser = null;
-        try {
-            selfUser = repo.getSynced(uid).getValue();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        //setUpViewModel();
+        preferences = getSharedPreferences("com.example.socialcompass", MODE_PRIVATE);
+        uid = preferences.getString("uid", "");
+        private_code = preferences.getString("private_code", "");
+        label = preferences.getString("name", "");
+        var serverURL = preferences.getString("server_url", "");
+        SocialCompassAPI.provide().useURL(serverURL);
+        Log.d("get public", uid);
+        Log.d("get private", private_code);
+
         this.loadProfile();
 
         /*
@@ -106,26 +114,11 @@ public class ShowMapActivity extends AppCompatActivity {
         orientationService = OrientationService.singleton(this);
         compass = (ConstraintLayout) findViewById(R.id.compass);
         cp = new ConstraintProperties(compass);
-        TextView north = (TextView) findViewById(R.id.North);
+        updateCircles();
         trackGps();
 
-        /*
-        Two different modes: Orientation manual setting vs orientation tracking
-         */
-        if (!((this.manual_rotation >= 0) && (this.manual_rotation < 360))) {
-            /*
-            Orientation tracking
-             */
-            this.reobserveOrientation();
-        } else {
-            /*
-            Orientation manual setting
-             */
-            ConstraintLayout.LayoutParams northlayoutparams = (ConstraintLayout.LayoutParams) north.getLayoutParams();
-            northlayoutparams.circleAngle = 360.0f - manual_rotation;
-        }
-        this.reobserveLocation();
-
+        //this.reobserveLocation();
+        this.reobserveOrientation();
         try {
             refreshPositions();
         } catch (IOException e) {
@@ -136,20 +129,127 @@ public class ShowMapActivity extends AppCompatActivity {
 
     }
 
+    /**
+     * Method to set up view model
+     */
+    public void setUpViewModel(){
+        this.viewmodel = new ViewModelProvider(this).get(SocialCompassViewModel.class);
+    }
+
+    /**
+     * method to check for collision for a given user ID
+     * @param labelID
+     */
+    private void checkCollisions(int labelID) {
+        Rect rect1 = new Rect();
+        Rect rect2 = new Rect();
+        boolean changedLabel = false;
+        TextView labelOne = findViewById(labelID);
+        // look through all labels currently on screen
+        for (String label2ID : textID2imageID.keySet()) {
+            // makes sure we don't track a label as colliding with itself
+            if (!label2ID.equals(Integer.toString(labelID))) {
+                // get textview of labels we are currently looking at
+
+                TextView labelTwo = findViewById(Integer.parseInt(label2ID));
+
+                // set rect1, rect2, to point at the rectangles created by the textviews
+                labelOne.getGlobalVisibleRect(rect1);
+                labelTwo.getGlobalVisibleRect(rect2);
+
+                // must update imageView's associated with labels as well as labels themselves
+                // checks if rectangles created by labels collide with each other
+                if (Rect.intersects(rect1, rect2)) {
+                    changedLabel = true;
+                    Log.d("COLLISION", "labels DO collide");
+                    Log.d("VISIBILITY", "set labels to invisible");
+                    Log.d("ID", Integer.toString(labelID));
+                    Log.d("ID2", label2ID);
+                    // if labels collide wipe text off screen
+                    float angle1 = ((ConstraintLayout.LayoutParams)labelOne.getLayoutParams()).circleAngle;
+                    float angle2 = ((ConstraintLayout.LayoutParams)labelTwo.getLayoutParams()).circleAngle;
+                    if (Math.abs(angle1-angle2)> 5){
+
+                        useTruncateLabel(labelOne);
+                    } else {
+
+                        useTruncateLabel(labelOne);
+//                        stackLabel(labelOne, labelTwo);
+
+                    }
+                    break;
+                }
+            }
+        }
+        if (!changedLabel) {
+            useFullLabel(labelOne);
+        }
+    }
+
+    /**
+     * Method to truncate labels
+     * @param view
+     */
+    private void useTruncateLabel(TextView view) {
+        String originalText = view.getText().toString();
+        view.setText(originalText.substring(0, Math.min(MAX_TRUNCATED_LENGTH, originalText.length())));
+    }
+
+    /**
+     * Method to untruncate labels
+     * @param view
+     */
+    private void useFullLabel(TextView view) {
+        String originalText = userLabels.get(String.valueOf(view.getId()));
+        view.setText(originalText);
+    }
+
+
+    /**
+     * Method to stack close labels
+     * @param label1
+     * @param label2
+     */
+    public void stackLabel(TextView label1, TextView label2){
+        float angle1 = ((ConstraintLayout.LayoutParams)label1.getLayoutParams()).circleAngle;
+        float angle2 = ((ConstraintLayout.LayoutParams)label2.getLayoutParams()).circleAngle;
+        float y_coordinate1 = ((ConstraintLayout.LayoutParams)label1.getLayoutParams()).circleRadius;
+        float y_coordinate2 = ((ConstraintLayout.LayoutParams)label2.getLayoutParams()).circleRadius;
+        TextView upper = null;
+        TextView lower = null;
+        if(y_coordinate1>y_coordinate2){
+            upper = label1;
+            lower = label2;
+        }else{
+            lower = label1;
+            upper = label2;
+        }
+        ((ConstraintLayout.LayoutParams)upper.getLayoutParams()).circleRadius+=40;
+        ((ConstraintLayout.LayoutParams)upper.getLayoutParams()).circleAngle+=20;
+        ((ConstraintLayout.LayoutParams)lower.getLayoutParams()).circleRadius-=40;
+        ((ConstraintLayout.LayoutParams)lower.getLayoutParams()).circleAngle-=20;
+
+    }
+
+    /**
+     * Method to refresh users in local database from remote server
+     * @throws IOException
+     * @throws InterruptedException
+     */
     private void refreshPositions() throws IOException, InterruptedException {
         ScheduledFuture<?> poller;
         ScheduledExecutorService schedular = Executors.newScheduledThreadPool(1);
         poller = schedular.scheduleAtFixedRate(() -> {
-            SocialCompassDatabase db = SocialCompassDatabase.provide(getApplicationContext()); //fix this later lmao
-            SocialCompassDao dao = db.getDao();
-            SocialCompassRepository repo = new SocialCompassRepository(dao);
 
-            LiveData<List<SocialCompassUser>> allFriends = repo.getAllLocal();
+            LiveData<List<SocialCompassUser>> allFriends = viewmodel.getAllUserLocal();
             List<SocialCompassUser> friendList = allFriends.getValue();
             for (SocialCompassUser friend : friendList) {
                 String currID = friend.public_code;
                 try {
-                    dao.upsert(repo.getRemote(currID).getValue());
+                    //dao.upsert(repo.getRemote(currID).getValue());
+                    viewmodel.getUserRemote(currID).observe(this, theUser->{
+                        viewmodel.upsert(theUser);
+                    });
                 } catch (Exception e) {
                     Log.d("EXC", e.toString());
                 }
@@ -157,6 +257,9 @@ public class ShowMapActivity extends AppCompatActivity {
         }, 0, 1, TimeUnit.MINUTES);
     }
 
+    /**
+     * Method to track GPS signal
+     */
     private void trackGps() {
         // create a poller that will every minute see if we still have gps access
         // if the poller returns that we do not have gps access, increment secondsNoGps by 60
@@ -173,7 +276,11 @@ public class ShowMapActivity extends AppCompatActivity {
         }, 0, 3, TimeUnit.SECONDS);
     }
 
-    private void onGpsChanged(int minutesNoGps) {
+    /**
+     * Method to display GPS status
+     * @param minutesNoGps
+     */
+    public void onGpsChanged(int minutesNoGps) {
         Button gpsButton  = (Button) findViewById(R.id.displayGpsStatus);
         if ((minutesNoGps > 0) && (minutesNoGps < 60)) {
             gpsButton.setText("" + minutesNoGps + "M");
@@ -195,21 +302,26 @@ public class ShowMapActivity extends AppCompatActivity {
 
                 current = currentLocation;
 
-                Log.d("observeLocations", "entered this");
-                SocialCompassDatabase db = SocialCompassDatabase.provide(getApplicationContext()); //fix this later lmao
-                SocialCompassDao dao = db.getDao();
-                SocialCompassRepository repo = new SocialCompassRepository(dao);
+                previousLocation = currentLocation;
 
+                try {
+                    viewmodel.upsertRemote(new SocialCompassUser(private_code, uid, label, (float) currentLocation.getLatitude(), (float) currentLocation.getLongitude()));
+                    Log.d("Public code", uid);
+                    Log.d("Private code", private_code);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                Log.d("observeLocations", "entered this");
 
                 updateCircles();
+
                 for (var id : userIDs.keySet()) {
                     int idInt = Integer.parseInt(id);
-                    TextView userView = findViewById(idInt);
                     String publicCode = userIDs.get(id);
-                    SocialCompassUser theUser;
                     try {
-                        theUser = repo.getSynced(publicCode).getValue();
-                        updateUserView(id, theUser);
+                        viewmodel.getUserSynced(publicCode).observeForever(theUsers->{
+                            updateUserView(id, theUsers);
+                        });
                     } catch (Exception e) {
                         e.printStackTrace();
                     }
@@ -219,13 +331,18 @@ public class ShowMapActivity extends AppCompatActivity {
         });
     }
 
-    private void updateCircles() {
+
+    /**
+     * Method to update circles according to state
+     */
+    public void updateCircles() {
         ImageView circle1 = findViewById(R.id.circle1);
         ImageView circle2 = findViewById(R.id.circle2);
         ImageView circle3 = findViewById(R.id.circle3);
         ImageView circle4 = findViewById(R.id.circle4);
 
         if(state==1){
+            // state 1
             circle1.getLayoutParams().width = 900;
             circle1.getLayoutParams().height = 900;
             circle2.getLayoutParams().width = Utilities.INVISIBLE_CIRCLE;
@@ -235,6 +352,7 @@ public class ShowMapActivity extends AppCompatActivity {
             circle4.getLayoutParams().width = Utilities.INVISIBLE_CIRCLE;
             circle4.getLayoutParams().height = Utilities.INVISIBLE_CIRCLE;
         }else if(state==2){
+            //state 2
             circle1.getLayoutParams().width = 900/2;
             circle1.getLayoutParams().height = 900/2;
             circle2.getLayoutParams().width = 900;
@@ -245,6 +363,7 @@ public class ShowMapActivity extends AppCompatActivity {
             circle4.getLayoutParams().height = Utilities.INVISIBLE_CIRCLE;
 
         }else if(state==3){
+            //state 3
             circle1.getLayoutParams().width = 300;
             circle1.getLayoutParams().height = 300;
             circle2.getLayoutParams().width = 600;
@@ -254,6 +373,7 @@ public class ShowMapActivity extends AppCompatActivity {
             circle4.getLayoutParams().width = Utilities.INVISIBLE_CIRCLE;
             circle4.getLayoutParams().height = Utilities.INVISIBLE_CIRCLE;
         }else{
+            //state 4
             circle1.getLayoutParams().width = 300;
             circle1.getLayoutParams().height = 300;
             circle2.getLayoutParams().width = 500;
@@ -284,17 +404,21 @@ public class ShowMapActivity extends AppCompatActivity {
     }
 
     /**
-     * Called when the user taps the Back button
-     * BUG::: BACK BUTTON WILL ALWAYS END UP WITH US ENTERING SHOW MAP AGAIN PLZ FIX
+     * binded to add friend button, go to add friend activity
+     * @param view
      */
-    public void onBackClicked(View view) {
-        Intent intent = new Intent(this, MainActivity.class);
-        startActivity(intent);
-    }
-
     public void onAddFriendsClicked(View view) {
         Intent i = new Intent(this, AddFriendActivity.class);
         i.putExtra("uid", uid);
+        startActivity(i);
+    }
+
+    /**
+     * binded to add mock friend button, go to mock friend activity
+     * @param view
+     */
+    public void onMockFriendsClicked(View view) {
+        Intent i = new Intent(this, MockFriendActivity.class);
         startActivity(i);
     }
 
@@ -313,17 +437,8 @@ public class ShowMapActivity extends AppCompatActivity {
      */
     public void loadProfile() {
         preferences = getSharedPreferences("com.example.socialcompass", MODE_PRIVATE);
-        var db = SocialCompassDatabase.provide(this.getApplicationContext());
-        var dao = db.getDao();
-        var repo = new SocialCompassRepository(dao);
-        var userList = repo.getAllLocal();
-        userList.observe(this, this::loadUsers);
-
-        manual_rotation = -1;
-        try {
-            manual_rotation = Integer.parseInt(preferences.getString("manual_rotation", "-1"));
-        } catch (NumberFormatException e) {
-        }
+        //var userList = viewmodel.getAllUserLocal();
+        //userList.observe(this, this::loadUsers);
     }
 
     /**
@@ -344,23 +459,9 @@ public class ShowMapActivity extends AppCompatActivity {
         return previousLocation;
     }
 
-    /**
-     * For test use only
-     *
-     * @param latitude, longitude
-     */
-    public void setDestination1(Double latitude, Double longitude) {
-        destination1 = new Position(latitude, longitude);
-    }
 
-    /**
-     * For test use only
-     *
-     * @param orientation
-     */
-    public void setOrientation(float orientation) {
-        this.orientation = orientation;
-    }
+
+
 
     public void addNewUserView(float angle, int radius, String str, String public_code) {
         // Get a reference to the ConstraintLayout
@@ -377,6 +478,7 @@ public class ShowMapActivity extends AppCompatActivity {
         var imageViewID = View.generateViewId();
         userIDs.put(Integer.toString(textViewID), public_code);
         textID2imageID.put(Integer.toString(textViewID), Integer.toString(imageViewID));
+        userLabels.put(Integer.toString(textViewID), str);
         newTextView.setId(textViewID);
         newImageView.setId(imageViewID);
         newTextView.setTextSize(20);
@@ -400,33 +502,34 @@ public class ShowMapActivity extends AppCompatActivity {
                 angle
         );
         cons.applyTo(constraintLayout);
+        checkCollisions(textViewID);
     }
 
+    /**
+     * calculate a user's location on the screen, radius and orientation angle
+     * @param x
+     * @param y
+     * @return
+     */
     // return
     private Pair<Float, Integer> calculateLocation(float x, float y) {
         double distance = Utilities.calculateDistance(current.getLatitude(), current.getLongitude(), x, y);
-//        Integer radius = (int) (dpscale * distance / distanceScale);
-        Integer radius = (int) Utilities.calculateUserViewRadius(distance, this.state);
+        int radius = (int) Utilities.calculateUserViewRadius(distance, this.state);
         Float relativeAngle = Utilities.relativeAngleUtils(current.getLatitude(), current.getLongitude(), (double) x, (double) y);
         TextView north = (TextView) findViewById(R.id.North);
         ConstraintLayout.LayoutParams northlayoutparams = (ConstraintLayout.LayoutParams) north.getLayoutParams();
 
         Float northAngle = northlayoutparams.circleAngle;
 
-        if (radius > 450) {
-            radius = 450;
-        }
-
-        Log.d("Distance", Double.toString(distance));
-        Log.d("current lat", Double.toString(current.getLatitude()));
-        Log.d("current long", Double.toString(current.getLongitude()));
-        Log.d("x", Float.toString(x));
-        Log.d("y", Float.toString(y));
-        Log.d("dp", Integer.toString(radius));
-
         return new Pair<>((relativeAngle + northAngle) % 360, radius);
     }
 
+
+    /**
+     * update user's text view according to remote server data
+     * @param textViewID
+     * @param user
+     */
     private void updateUserView(String textViewID, SocialCompassUser user) {
         TextView textView = findViewById(Integer.parseInt(textViewID));
         ImageView imageView = findViewById(Integer.parseInt(textID2imageID.get(textViewID)));
@@ -438,6 +541,7 @@ public class ShowMapActivity extends AppCompatActivity {
         } else {
             textView.setVisibility(View.VISIBLE);
             imageView.setVisibility(View.INVISIBLE);
+            checkCollisions(Integer.parseInt(textViewID));
         }
         ConstraintSet cons = new ConstraintSet();
         cons.clone(constraintLayout);
@@ -452,50 +556,41 @@ public class ShowMapActivity extends AppCompatActivity {
                 theLoc.first
         );
         cons.applyTo(constraintLayout);
-
-        Log.d("updated", Integer.toString(theLoc.second));
     }
 
+    /**
+     * Method binded to zoom in button
+     * @param view
+     */
     public void onZoomInClicked(View view) {
         if (state > 1 && state <= 4) {
             state--;
-            if (state == 1) {
-                this.distanceScale = 1;
-            } else if (state == 2) {
-                this.distanceScale = 10;
-            } else if (state == 3) {
-                this.distanceScale = 100;
-            } else {
-                this.distanceScale = 500;
-            }
+            updateCircles();
             this.reobserveLocation();
         } else {
             Utilities.displayAlert(this, "Cannot zoom in more!");
         }
     }
 
+    /**
+     * Method binded to zoom out button
+     * @param view
+     */
     public void onZoomOutClicked(View view) {
         if (state >= 1 && state < 4) {
             state++;
-            if (state == 1) {
-                this.distanceScale = 1;
-            } else if (state == 2) {
-                this.distanceScale = 10;
-            } else if (state == 3) {
-                this.distanceScale = 100;
-            } else {
-                this.distanceScale = 500;
-            }
+            updateCircles();
             this.reobserveLocation();
         } else {
             Utilities.displayAlert(this, "Cannot zoom out more!");
         }
     }
 
+    /**
+     * Method to load all friends onto the screen
+     * @param users
+     */
     private void loadUsers(List<SocialCompassUser> users) {
-        var db = SocialCompassDatabase.provide(getApplicationContext()); //fix this later lmao
-        var dao = db.getDao();
-        var repo = new SocialCompassRepository(dao);
         if (userIDs.isEmpty()) {
             for (var user : users) {
                 Log.d("code", user.public_code);
@@ -506,15 +601,57 @@ public class ShowMapActivity extends AppCompatActivity {
             for (var id : userIDs.keySet()) {
                 int idInt = Integer.parseInt(id);
                 String publicCode = userIDs.get(id);
-                SocialCompassUser theUser;
                 try {
-                    theUser = repo.getSynced(publicCode).getValue();
-                    updateUserView(id, theUser);
+                    viewmodel.getUserSynced(publicCode).observeForever(theUsers->{
+                        updateUserView(id, theUsers);
+                    });
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             }
         }
+    }
 
+    //For testing purpose
+    public void setUserInfo(String uid, String private_code, String label){
+        this.uid = uid;
+        this.private_code = private_code;
+        this.label = label;
+    }
+
+    public void reobserveLocationMocking() {
+        ((LocationService) locationService).getLocation().observe(this, new Observer<Position>() {
+            @Override
+            public void onChanged(Position currentLocation) {
+
+                current = currentLocation;
+
+                previousLocation = currentLocation;
+
+                try {
+                    viewmodel.upsertRemote(new SocialCompassUser(private_code, uid, label, (float) currentLocation.getLatitude(), (float) currentLocation.getLongitude()));
+                    Log.d("Public code", uid);
+                    Log.d("Private code", private_code);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                Log.d("observeLocations", "entered this");
+
+                updateCircles();
+
+                for (var id : userIDs.keySet()) {
+                    int idInt = Integer.parseInt(id);
+                    String publicCode = userIDs.get(id);
+                    try {
+                        viewmodel.getUserSynced(publicCode).observeForever(theUsers->{
+                            updateUserView(id, theUsers);
+                        });
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+
+            }
+        });
     }
 }
